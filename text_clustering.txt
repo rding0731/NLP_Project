@@ -1,0 +1,142 @@
+def replace_all(text, dic):
+    '''
+    Input: String and A {word: replacement} dictionary
+    Output: String
+    '''
+    for i, j in dic.items():
+        text = text.lower().replace(i, j)
+    return text
+
+
+def decontracted(phrase):
+    '''
+    This is to expand contractions
+    Input : String
+    Output: String
+    '''
+    # specific
+    phrase = re.sub(r"won't", "will not", phrase)
+    phrase = re.sub(r"can\'t", "can not", phrase)
+    
+    # general
+    phrase = re.sub(r"n\'t", " not", phrase)
+    phrase = re.sub(r"\'re", " are", phrase)
+    phrase = re.sub(r"\'s", " is", phrase)
+    phrase = re.sub(r"\'d", " would", phrase)
+    phrase = re.sub(r"\'ll", " will", phrase)
+    phrase = re.sub(r"\'t", " not", phrase)
+    phrase = re.sub(r"\'ve", " have", phrase)
+    phrase = re.sub(r"\'m", " am", phrase)
+    
+    # this is to get rid of the '\\&quote' or anything similar to that. 
+    phrase = re.sub(r"\\\\(.*?)", " ", phrase)
+    phrase = re.sub(r"\\(.*?)\;",  "", phrase)
+
+    return phrase
+
+## remove numbers and email address
+def word_digit_extract(phrase):
+    '''
+    Input: String
+    Output: A list of digits
+    Usage: This is to remove for modeling purpose
+    '''
+    phrase = re.sub('\S*@\S*\s?', '', phrase)
+    phrase = re.sub("\S*\d\S*", '', phrase)
+    return phrase
+
+replaces_list = {"cust ": "customer ", "\n" : "", "acct " : "account ", "custoemr" : "customer", 
+                 "stat ": "status ",
+'cst ' : 'customer '}
+
+# Step 1: decontracted the sentence
+Issue_0 = []
+for i in Issues:
+        Issue_0.append(decontracted(i))
+
+# Step 2: Replace the words in the replace_list in Issue_0.
+Issue_1 = []
+for i in range(0, len(Issue_0)):   
+    Issue_1.append(replace_all(Issue_0[i].lower(), replaces_list))
+
+# Step3: Get rid of the numbers and email
+Issue_2 = []
+for i in Issue_1:
+    Issue_2.append(word_digit_extract(i))
+
+# Spelling Correction
+%run AutoCorrection.py
+Corrected_Spelling = []
+for entry in Issue_text:
+    empty = []
+    for word in entry.split(" "):
+        corrected_word = best_word(i, True)
+        if corrected_word is not None:
+            empty.append(best_word(word)[0])
+
+# Portter
+%run CustomerizedStemming.py
+Port = PorterStemmer()
+
+Stemmed_issues = []
+for entry in Issue_text:
+    empty = []
+    for word in entry.split(" "):
+         empty.append(Port.stem(word))
+    Stemmed_issues.append(" ".join(empty))
+        else:
+            empty.append(word)
+    Corrected_Spelling.append(" ".join(empty))
+
+#TDIDF
+#Try both Single Gram and By_Gram
+tdidf_vectorizer = TfidfVectorizer(analyzer = 'word', max_df = 0.95, min_df = 0.001, stop_words = 'english',
+                                   use_idf = True, ngram_range = (1,2))
+
+%time 
+X = tdidf_vectorizer.fit_transform(Stemmed_issues)
+
+print(X.shape)
+
+
+
+## Pick the number of clusters
+
+k_range = [100, 150, 200, 300, 400, 500]
+
+k_mean_Var = [MiniBatchKMeans(n_clusters = k, init_size = 30000, batch_size = 10000).fit(X_lsa_matrix) for k in k_range]
+
+centroids = [X.cluster_centers_ for X in k_mean_Var]
+
+from scipy.spatial.distance import cdist
+import numpy as np
+
+k_cosine = [cdist(X_lsa_matrix[:1000, ], cent, 'cosine') for cent in centroids]
+dist =[np.min(ke, axis = 1) for ke in k_cosine]
+
+wcss = [sum(d**2)/1000 for d in dist]
+
+
+
+num_cluster = 50
+
+km = MiniBatchKMeans(n_clusters = num_cluster, init = 'k-means++', n_init = 5, 
+                     init_size = 300000, batch_size = 100000, reassignment_ratio = 0.1, 
+                     random_state = 30)
+
+km.fit(X)
+
+clusters = km.labels_.tolist()
+
+print ("Silhouette coefficient: %0.3f" % metrics.silhouette_score(X, km.labels_, metric = 'cosine', sample_size = 10000))
+
+#joblib.dump(km, '120_cluster_lsa.pkl')
+
+print("Top terms per cluster:")
+order_centroids = km.cluster_centers_.argsort()[:, ::-1]
+terms = tdidf_vectorizer.get_feature_names()
+for i in range(num_cluster):
+    print("Cluster %d:" % i, end='')
+    for ind in order_centroids[i, :30]:
+        print(' %s' % terms[ind], end='')
+        print()
